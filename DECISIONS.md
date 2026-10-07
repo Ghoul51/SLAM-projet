@@ -5,3 +5,5 @@
 | 06/10/2026 | Installation du banc d'essai | Installation de Windows 11 Pro sur VirtualBox | Étant donné l'absence de serveur FOG, j'ai créé une VM qui sert de banc d'essai. |
 | 07/10/2026 | Choix de l'hébergement | Hébergement privé sur GitHub | Le sujet impose un dépôt privé, GitHub fait sens car je l'ai déjà utilisé par le passé. |
 | 07/10/2026 | Environnement virtuel | Mise en place d'un environnement virtuel (.venv) | Afin d'éviter tout conflit futur, l'environnement virtuel permet au projet d'avoir ses propres bibliothèques. |
+| 07/10/2026 | Format du catalogue | Fichier Markdown docs/catalogue.md | Réutilisable dans la version finale du rendu, meilleure lisibilité |
+| 07/10/2026 | Format de l'ID | Exemple : IDENT_... / MAT_... | Distingable rapidement pour chaques domaines |
