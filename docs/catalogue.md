@@ -13,4 +13,6 @@
 | SYS_IP | Système | Adresse IP obtenue par DHCP, aucune adresse fixe résiduelle | Majeur | PowerShell avec WMI | Automatique : retour au DHCP pour l'adresse et le DNS | ... |
 | SEC_ANTIVIRUS | Sécurité | Antivirus actif, protection en temps réel | Bloquant | PowerShell avec WMI | Manuelle | Veuillez activer votre antivirus |
 | SEC_SIGN | Sécurité | Signatures antivirus plus récentes que le seuil | Majeur | PowerShell avec WMI | Automatique : mise à jour des signatures | ... |
-| SEC_BITLOCKER
+| SEC_BITLOCKER | Sécurité | Etat de BitLocker conforme à l'exigence du profil | Bloquant | PowerShell avec WMI | Manuelle : activer, et déposer la clé de récupération à l'emplacement indiqué par la configuration | (je ne sais pas) |
+| SEC_PROFILS | Sécurité | Les 3 profils du pare-feu actifs | Bloquant | PowerShell avec WMI | Automatique | ... |
+| SEC_MAJ_WINDOWS | Sécurité | Service de mise à jour de Windows actif et démarable | Bloquant | PowerShell avec WMI |   
