@@ -1,0 +1,50 @@
+{
+  "nom": "POSTE-ACCUEIL",
+  "version": "1.0",
+  "date_validation": "2026-10-09",
+  "identite": {
+    "IDENT_MACHINE": {"actif": true, "prefixe": "PC-EXP", "modele": "^PC-EXP-[0-9]{3}$"},
+    "IDENT_COMPTE_ADMIN": {"actif": true, "compte": "adm-experty"},
+    "IDENT_COMPTE_LOCAL": {"actif": true, "comptes_autorises": ["adm-experty", "accueil"]}
+  },
+  "materiel": {
+    "MAT_RAM": {"actif": true, "minimum_go": 8},
+    "MAT_STOCKAGE": {"actif": true, "libre_minimum_go": 30},
+    "MAT_SMART": {"actif": true, "sante_attendue": "Healthy"},
+    "MAT_TYPE_SUPPORT": {"actif": true, "type_attendu": "SSD"}
+  },
+  "systeme": {
+    "SYS_OS_VERSION": {"actif": true, "edition": "Pro", "version": "10.0.26100"},
+    "SYS_TURN_ON": {"actif": true, "activation_exigee": true},
+    "SYS_SERV_TIME": {"actif": true, "serveur": "time.windows.com", "ecart_max_secondes": 10},
+    "SYS_IP": {"actif": true, "dhcp": true}
+  },
+  "securite": {
+    "SEC_ANTIVIRUS": {"actif": true, "produit": "Microsoft Defender"},
+    "SEC_SIGN": {"actif": true, "age_max_jours": 3},
+    "SEC_BITLOCKER": {"actif": true, "exige": true},
+    "SEC_PROFILS": {"actif": true, "profils": ["Domain", "Private", "Public"]},
+    "SEC_MAJ_WINDOWS": {"actif": true, "service": "wuauserv"},
+    "SEC_MAJ": {"actif": true, "maximum": 5}
+  },
+  "logiciels": {
+    "LOG_WINGET": {"actif": true, "requis": [
+      {"nom": "Google Chrome Enterprise", "winget_id": "A_COMPLETER"},
+      {"nom": "Acrobat Reader", "winget_id": "Adobe.Acrobat.Reader.64-bit"},
+      {"nom": "7-Zip", "winget_id": "7zip.7zip"}
+    ]},
+    "LOG_FORB": {"actif": true, "interdits": ["A_COMPLETER"]},
+    "LOG_START": {"actif": true, "services": [
+      {"nom": "Spooler", "etat": "Running", "demarrage": "Automatic"}
+    ]}
+  },
+  "environnement": {
+    "ENV_NUM_PAD": {"actif": true, "attendu": true},
+    "ENV_HIDDEN_FILES": {"actif": true, "extensions_visibles": true, "fichiers_caches_visibles": false, "confirmation_suppression": true},
+    "ENV_CHROME_START": {"actif": true, "url": "A_COMPLETER"},
+    "ENV_PRINT": {"actif": true, "nom": "Imprimante-Accueil"}
+  },
+  "journaux": {
+    "JRN_CRITICAL_EVENT": {"actif": true, "maximum_24h": 3}
+  }
+}
