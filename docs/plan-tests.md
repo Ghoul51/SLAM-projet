@@ -12,5 +12,9 @@ Environnement : poste de développement, Python 3.14.7, tests lancés depuis le 
 | T06 | `POSTE-COMPTABLE.json` : `"minimum_go": -1` | `python main.py` | Refus avec la clé concernée et « ne peut pas être négatif » | Conforme : refus sur `materiel.MAT_RAM.minimum_go`, « ne peut pas être négatif » |
 | T07 | `POSTE-COMPTABLE.json` : `"actif": false` sur `SEC_BITLOCKER` | `python main.py` | Refus : contrôle obligatoire, impossible à désactiver | Conforme : refus sur `securite.SEC_BITLOCKER.actif`, « contrôle obligatoire : il ne peut pas être désactivé » |
 | T08 | `POSTE-COMPTABLE.json` : `"maximum": 2` remplacé par `3` pour `SEC_MAJ` | `python main.py` | Profil accepté et empreinte différente de la précédente | Conforme : profil accepté, empreinte changée (`...` au lieu de `1a11ccc7...`) |
+| T09 | `powershell.py` et `recette.ini` en place | Commande `Get-CimInstance Win32_OperatingSystem \| Select-Object Caption, Version` | Un résultat structuré (dictionnaire) | Conforme : `Caption` et `Version` renvoyés (poste de développement) |
+| T10 | Idem | Commande qui renvoie `'été à Reims'` | Accents corrects | Conforme : `été à Reims` |
+| T11 | Idem | `Get-Item C:\dossier-inexistant` | Erreur capturée, message explicite, aucune trace Python | Conforme : « PowerShell a renvoyé une erreur : Get-Item : Impossible de trouver le chemin d'accès... » |
+| T12 | Idem, délai fixé à 2 s | `Start-Sleep -Seconds 5` | Message « Délai dépassé », sans blocage | Conforme : « Délai dépassé (2 s) : la commande n'a pas répondu » |
 
 Les tests T05 à T08 montrent qu'un profil cassé est refusé proprement (RG05) et qu'une modification du profil change son empreinte (section 3.3.11) sans toucher au code.
