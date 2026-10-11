@@ -1,7 +1,7 @@
 {
   "nom": "POSTE-ACCUEIL",
   "version": "1.0",
-  "date_validation": "2026-10-09",
+  "date_validation": "2026-10-11",
   "identite": {
     "IDENT_MACHINE": {"actif": true, "prefixe": "PC-EXP", "modele": "^PC-EXP-[0-9]{3}$"},
     "IDENT_COMPTE_ADMIN": {"actif": true, "compte": "adm-experty"},
@@ -20,7 +20,7 @@
     "SYS_IP": {"actif": true, "dhcp": true}
   },
   "securite": {
-    "SEC_ANTIVIRUS": {"actif": true, "produit": "Microsoft Defender"},
+    "SEC_ANTIVIRUS": {"actif": true, "produit": "Windows Defender"},
     "SEC_SIGN": {"actif": true, "age_max_jours": 3},
     "SEC_BITLOCKER": {"actif": true, "exige": true},
     "SEC_PROFILS": {"actif": true, "profils": ["Domain", "Private", "Public"]},
@@ -29,11 +29,11 @@
   },
   "logiciels": {
     "LOG_WINGET": {"actif": true, "requis": [
-      {"nom": "Google Chrome Enterprise", "winget_id": "A_COMPLETER"},
-      {"nom": "Acrobat Reader", "winget_id": "Adobe.Acrobat.Reader.64-bit"},
+      {"nom": "Google Chrome", "winget_id": "Google.Chrome"},
+      {"nom": "Adobe Acrobat", "winget_id": "Adobe.Acrobat.Reader.64-bit"},
       {"nom": "7-Zip", "winget_id": "7zip.7zip"}
     ]},
-    "LOG_FORB": {"actif": true, "interdits": ["A_COMPLETER"]},
+    "LOG_FORB": {"actif": true, "interdits": ["qBittorrent"]},
     "LOG_START": {"actif": true, "services": [
       {"nom": "Spooler", "etat": "Running", "demarrage": "Automatic"}
     ]}
@@ -41,7 +41,7 @@
   "environnement": {
     "ENV_NUM_PAD": {"actif": true, "attendu": true},
     "ENV_HIDDEN_FILES": {"actif": true, "extensions_visibles": true, "fichiers_caches_visibles": false, "confirmation_suppression": true},
-    "ENV_CHROME_START": {"actif": true, "url": "A_COMPLETER"},
+    "ENV_CHROME_START": {"actif": true, "url": "https://www.google.fr"},
     "ENV_PRINT": {"actif": true, "nom": "Imprimante-Accueil"}
   },
   "journaux": {
