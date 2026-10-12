@@ -16,5 +16,8 @@ Environnement : poste de développement, Python 3.14.7, tests lancés depuis le 
 | T10 | Idem | Commande qui renvoie `'été à Reims'` | Accents corrects | Conforme : `été à Reims` |
 | T11 | Idem | `Get-Item C:\dossier-inexistant` | Erreur capturée, message explicite, aucune trace Python | Conforme : « PowerShell a renvoyé une erreur : Get-Item : Impossible de trouver le chemin d'accès... » |
 | T12 | Idem, délai fixé à 2 s | `Start-Sleep -Seconds 5` | Message « Délai dépassé », sans blocage | Conforme : « Délai dépassé (2 s) : la commande n'a pas répondu » |
+| T13 | `sondes.py` (identité et matériel), poste de développement | `python main.py` | 7 valeurs lues, sans erreur ni plantage | Conforme : 7 sondes renvoient une valeur (nom, compte admin absent, comptes actifs, RAM, espace libre, santé et type du disque). Les résultats qui font foi seront ceux de la VM (voir T-VM) |
+| T14 | `sondes.py` (17 sondes), poste de développement, sans droits administrateur | `python main.py` | 17 valeurs ou états indéterminés avec raison, sans plantage | Conforme : 16 valeurs lues ; `SEC_BITLOCKER` indéterminé (accès refusé), sans plantage. Défaut corrigé : source de temps lue dans le registre au lieu du texte de `w32tm` |
+| T15 | `sondes.py` (25 sondes), poste de développement, sans droits administrateur | `python main.py` | 25 lignes : valeurs lues ou états indéterminés avec raison, sans plantage | Conforme : 24 valeurs lues ; `SEC_BITLOCKER` indéterminé (accès refusé) ; les 3 emplacements du registre sont lus pour les logiciels |
 
 Les tests T05 à T08 montrent qu'un profil cassé est refusé proprement (RG05) et qu'une modification du profil change son empreinte (section 3.3.11) sans toucher au code.
