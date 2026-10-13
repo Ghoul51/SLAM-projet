@@ -1,8 +1,8 @@
 import sys
 
+from comparaison import calculer_verdict, evaluer_profil
 from configuration import ErreurConfiguration, charger_configuration
 from profil import ErreurProfil, charger_profil, lister_profils
-from sondes import SONDES, ErreurSonde
 
 
 def main():
@@ -14,12 +14,11 @@ def main():
         print(f"ERREUR : {erreur}")
         sys.exit(1)
 
-    for identifiant, sonde in SONDES.items():
-        try:
-            valeur = sonde(profil.controles[identifiant], config.delai_max_secondes)
-        except ErreurSonde as erreur:
-            valeur = f"INDÉTERMINÉ : {erreur}"
-        print(f"{identifiant} : {valeur}")
+    resultats = evaluer_profil(profil, config.delai_max_secondes)
+    for r in resultats:
+        print(f"[{r.etat}] {r.identifiant} | {r.message}")
+    verdict = calculer_verdict(resultats)
+    print(f"\nVERDICT : {verdict.verdict} {verdict.motifs} | réserves : {verdict.reserves}")
 
 
 if __name__ == "__main__":
