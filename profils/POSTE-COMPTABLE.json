@@ -37,7 +37,9 @@
     ]},
     "LOG_FORB": {"actif": true, "interdits": ["qBittorrent"]},
     "LOG_START": {"actif": true, "services": [
-      {"nom": "Spooler", "etat": "Running", "demarrage": "Automatic"}
+      {"nom": "Spooler", "etat": "Running", "demarrage": "Automatic"},
+      {"nom": "Audiosrv", "etat": "Running", "demarrage": "Automatic"}
+
     ]}
   },
   "environnement": {

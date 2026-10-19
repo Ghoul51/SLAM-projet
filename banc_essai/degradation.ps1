@@ -11,7 +11,7 @@ function Degrader-Nom {
 function Degrader-IP {
     Write-Host "Dégradation 2 : adresse IP fixe 10.0.2.15 (DHCP désactivé)."
     Set-NetIPInterface -InterfaceAlias 'Ethernet' -Dhcp Disabled
-    Remove-NetIPAddress -InterfaceAlias 'Ethernet' -AddressFamily IPv4 -Confirm:$false
+    Remove-NetIPAddress -InterfaceAlias 'Ethernet' -AddressFamily IPv4 -Confirm:$false -ErrorAction SilentlyContinue
     New-NetIPAddress -InterfaceAlias 'Ethernet' -IPAddress 10.0.2.15 -PrefixLength 24 -DefaultGateway 10.0.2.2 | Out-Null
     Set-DnsClientServerAddress -InterfaceAlias 'Ethernet' -ServerAddresses ('1.1.1.1','8.8.8.8')
     Write-Host "Dégradation 2 : terminée."
@@ -40,8 +40,37 @@ function Degrader-Environnement {
     Write-Host "Dégradation 9 : terminée."
 }
 
-# Degrader-IP
+function Degrader-PareFeu {
+    Write-Host "Dégradation 3 : désactivation du profil Public du pare-feu."
+    Set-NetFirewallProfile -Profile Public -Enabled False
+    Write-Host "Dégradation 3 : terminée."
+}
+
+function Degrader-Compte {
+    Write-Host "Dégradation 8 : création du compte local non prévu 'stagiaire'."
+    New-LocalUser -Name 'stagiaire' -NoPassword | Out-Null
+    Write-Host "Dégradation 8 : terminée."
+}
+
+function Degrader-Service {
+    Write-Host "Dégradation 4 : arrêt et désactivation du service Audiosrv."
+    Stop-Service -Name 'Audiosrv' -Force
+    Set-Service -Name 'Audiosrv' -StartupType Disabled
+    Write-Host "Dégradation 4 : terminée."
+}
+
+function Degrader-LogicielSocle {
+    Write-Host "Dégradation 6 : désinstallation de 7-Zip (logiciel du socle)."
+    winget uninstall --id 7zip.7zip -e --silent --accept-source-agreements
+    Write-Host "Dégradation 6 : terminée (à vérifier avec la recette)."
+}
+
 Degrader-Imprimante
 Degrader-LogicielInterdit
+Degrader-LogicielSocle
 Degrader-Environnement
-# Degrader-Nom
+Degrader-PareFeu
+Degrader-Compte
+Degrader-IP
+Degrader-Service
+Degrader-Nom
