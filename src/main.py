@@ -1,24 +1,33 @@
+import ctypes
 import sys
+import tkinter as tk
+from tkinter import messagebox
 
-from comparaison import calculer_verdict, evaluer_profil
 from configuration import ErreurConfiguration, charger_configuration
-from profil import ErreurProfil, charger_profil, lister_profils
+from interface import Application
+
+
+def est_administrateur():
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except (AttributeError, OSError):
+        return False
+
+
+def afficher_erreur(message):
+    racine = tk.Tk()
+    racine.withdraw()
+    messagebox.showerror("Recette des postes", message)
+    racine.destroy()
 
 
 def main():
     try:
         config = charger_configuration()
-        # Test : le 2e profil par ordre alphabétique (POSTE-COMPTABLE)
-        profil = charger_profil(lister_profils(config.dossier_profils)[1])
-    except (ErreurConfiguration, ErreurProfil) as erreur:
-        print(f"ERREUR : {erreur}")
+    except ErreurConfiguration as erreur:
+        afficher_erreur(str(erreur))
         sys.exit(1)
-
-    resultats = evaluer_profil(profil, config.delai_max_secondes)
-    for r in resultats:
-        print(f"[{r.etat}] {r.identifiant} | {r.message}")
-    verdict = calculer_verdict(resultats)
-    print(f"\nVERDICT : {verdict.verdict} {verdict.motifs} | réserves : {verdict.reserves}")
+    Application(config, est_administrateur()).lancer()
 
 
 if __name__ == "__main__":
