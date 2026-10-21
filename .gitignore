@@ -182,3 +182,5 @@ cython_debug/
 
 python-portable/
 python-tk/
+pv/
+journal/
