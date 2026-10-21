@@ -16,7 +16,7 @@
   "systeme": {
     "SYS_OS_VERSION": {"actif": true, "edition": "Entreprise", "version": "10.0.26200"},
     "SYS_TURN_ON": {"actif": false, "activation_exigee": false},
-    "SYS_SERV_TIME": {"actif": true, "serveur": "time.windows.com", "ecart_max_secondes": 5},
+    "SYS_SERV_TIME": {"actif": true, "serveur": "time.cloudflare.com", "ecart_max_secondes": 5},
     "SYS_IP": {"actif": true, "dhcp": true}
   },
   "securite": {

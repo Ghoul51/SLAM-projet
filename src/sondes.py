@@ -128,7 +128,7 @@ def sonde_heure(parametres, delai):
     if not isinstance(configure, str) or not configure.strip():
         raise ErreurSonde("Aucun serveur de temps n'est configuré.")
     serveur = _litteral(parametres["serveur"])
-    lignes = _en_liste(_lire(f"$s = {serveur}; w32tm /stripchart /computer:$s /samples:1 /dataonly", delai))
+    lignes = _en_liste(_lire(f"$s = {serveur}; w32tm /stripchart /computer:$s /samples:3 /dataonly", delai))
     texte = " ".join(str(ligne) for ligne in lignes)
     ecarts = re.findall(r"([+-]\d+[.,]\d+)s", texte)
     if not ecarts:
