@@ -1,19 +1,24 @@
-"""Interface Tkinter (F6, F7). Aucune commande système dans ce fichier (§3.4.1)."""
+"""Interface Tkinter (F6, F7, F8). Aucune commande système dans ce fichier (§3.4.1)."""
+import logging
 import platform
 import queue
 import threading
 import tkinter as tk
+from dataclasses import replace
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from catalogue import AUTO, CATALOGUE, DOMAINES, MANUELLE
 from comparaison import CONFORME, ECART, INDETERMINE, NON_EVALUE, calculer_verdict, evaluer_profil
 from configuration import ErreurConfiguration, charger_configuration
+from corrections import ATTENTE, CORRECTIONS, ECHEC, ResultatCorrection, appliquer, confirmation
+from journal import creer_journal
 from profil import ErreurProfil, charger_profil, lister_profils
 from systeme import ouvrir_dossier
 
-VERSION_APPLICATION = "0.6"
-COULEURS = {CONFORME: "#c8f0c8", ECART: "#f5b5b5", INDETERMINE: "#ffd9a0", NON_EVALUE: "#dddddd"}
+VERSION_APPLICATION = "0.7"
+EN_COURS = "En cours"
+COULEURS = {CONFORME: "#c8f0c8", ECART: "#f5b5b5", INDETERMINE: "#ffd9a0", NON_EVALUE: "#dddddd", EN_COURS: "#cfe3f7"}
 COLONNES = (
     ("controle", "Contrôle", 380),
     ("attendu", "Attendu", 240),
@@ -30,17 +35,33 @@ class Application:
         self.config = config
         self.est_admin = est_admin
         self.chemins = {c.stem: c for c in lister_profils(config.dossier_profils)}
-        self.profil = None           # dernier profil chargé et validé
-        self.resultats = {}          # identifiant -> Resultat de la passe en cours
-        self.file = queue.Queue()    # le thread de travail y dépose, le thread principal y lit
-        self.en_cours = False
-        self.tableaux = {}           # titre d'onglet -> Treeview
+        self.profil = None                  # dernier profil chargé et validé
+        self.resultats = {}                 # identifiant -> Resultat de la passe en cours
+        self.file = queue.Queue()           # les threads de travail y déposent, le thread principal y lit
+        self.en_cours = False               # une recette complète tourne
+        self.corrections_en_cours = set()   # identifiants dont une correction tourne
+        self.attentes = {}                  # identifiant -> motif de prise en compte (RG07)
+        self.boucle_active = False          # la relève de la file est-elle programmée ?
+        self.id_selectionne = None
+        self.tableaux = {}                  # titre d'onglet -> Treeview
 
         self.fenetre = tk.Tk()
         self.fenetre.title("Recette des postes - EXPERTY")
         self.fenetre.geometry("1150x720")
-        self.fenetre.protocol("WM_DELETE_WINDOW", self.quitter)   # la croix de la fenêtre passe aussi par quitter()
+        self.fenetre.protocol("WM_DELETE_WINDOW", self.quitter)   # la croix passe aussi par quitter()
         self.filtre = tk.StringVar(value=FILTRES[0])              # après Tk() : une StringVar a besoin de la fenêtre
+
+        # Journal de session (RG06) : sans journal, aucune correction n'est autorisée.
+        self.journal_ok = True
+        try:
+            self.journal = creer_journal(config.dossier_journal)
+        except OSError as erreur:
+            self.journal_ok = False
+            self.journal = logging.getLogger("recette")
+            self.journal.addHandler(logging.NullHandler())
+            messagebox.showwarning(
+                "Journal",
+                f"Le journal de session n'a pas pu être créé : {erreur}\n\nLes corrections sont désactivées.")
 
         self._creer_menu()
         # L'ordre compte : zones du bas d'abord, onglets en dernier (ils prennent la place restante).
@@ -154,9 +175,12 @@ class Application:
 
     # ---------- Actions du menu Fichier ----------
 
+    def _occupe(self):
+        return self.en_cours or bool(self.corrections_en_cours)
+
     def _charger_profil_choisi(self):
         """Valide le profil sélectionné (RG05) et vide le tableau."""
-        if self.en_cours:
+        if self._occupe():
             return
         try:
             self.profil = charger_profil(self.chemins[self.choix_profil.get()])
@@ -166,7 +190,7 @@ class Application:
         self._vider_tableaux()
 
     def choisir_profil(self):
-        if self.en_cours:
+        if self._occupe():
             return
         chemin = filedialog.askopenfilename(
             title="Choisir le profil",
@@ -182,7 +206,7 @@ class Application:
         self._charger_profil_choisi()
 
     def recharger_configuration(self):
-        if self.en_cours:
+        if self._occupe():
             return
         try:
             self.config = charger_configuration()
@@ -204,8 +228,8 @@ class Application:
             messagebox.showerror("Dossier des PV", f"Impossible d'ouvrir {self.config.dossier_pv} : {erreur}")
 
     def quitter(self):
-        if self.en_cours:
-            messagebox.showwarning("Quitter", "Une recette est en cours : attendez la fin avant de quitter.")
+        if self._occupe():
+            messagebox.showwarning("Quitter", "Une recette ou une correction est en cours : attendez la fin avant de quitter.")
             return
         self.fenetre.destroy()
 
@@ -224,7 +248,7 @@ class Application:
     # ---------- Lancement de la recette (thread principal) ----------
 
     def lancer_recette(self):
-        if self.en_cours:
+        if self._occupe():
             return
         nom = self.choix_profil.get()
         if not nom:
@@ -242,9 +266,37 @@ class Application:
         self.bouton_lancer.config(state="disabled")
         self.choix_profil.config(state="disabled")
         threading.Thread(target=self._travail, args=(profil,), daemon=True).start()
-        self.fenetre.after(INTERVALLE_FILE_MS, self._relever_file)
+        self._demarrer_boucle()
 
-    # ---------- Thread de travail : NE TOUCHE JAMAIS AUX COMPOSANTS GRAPHIQUES ----------
+    def _demarrer_boucle(self):
+        """Programme la relève de la file, une seule boucle à la fois."""
+        if not self.boucle_active:
+            self.boucle_active = True
+            self.fenetre.after(INTERVALLE_FILE_MS, self._relever_file)
+
+    # ---------- Déclenchement d'une correction (F8, RG01) ----------
+
+    def _corriger(self):
+        identifiant = self.id_selectionne
+        if (identifiant is None or identifiant not in self.resultats or self.profil is None
+                or self._occupe() or identifiant not in CORRECTIONS):
+            return
+        if not self.journal_ok:
+            messagebox.showerror("Correction", "Le journal de session n'est pas disponible : correction refusée.")
+            return
+        parametres = self.profil.controles[identifiant]
+        texte = confirmation(identifiant, parametres)
+        # RG01 : sans ce clic de confirmation, rien n'est modifié sur le poste.
+        if not messagebox.askyesno("Confirmer la correction", f"{texte}\n\nVoulez-vous continuer ?"):
+            return
+
+        self.corrections_en_cours.add(identifiant)
+        self.bouton_corriger.config(state="disabled")
+        self._appliquer_filtre()   # la ligne passe en « En cours »
+        threading.Thread(target=self._travail_correction, args=(identifiant, parametres), daemon=True).start()
+        self._demarrer_boucle()
+
+    # ---------- Threads de travail : NE TOUCHENT JAMAIS AUX COMPOSANTS GRAPHIQUES ----------
 
     def _travail(self, profil):
         def rappel(numero, total, resultat):
@@ -256,23 +308,35 @@ class Application:
             self.file.put(("erreur", str(erreur), None))
         self.file.put(("fin", None, None))
 
+    def _travail_correction(self, identifiant, parametres):
+        try:
+            resultat = appliquer(identifiant, parametres, self.config.delai_max_secondes, self.journal)
+        except Exception as erreur:
+            self.journal.exception("%s : erreur inattendue pendant la correction", identifiant)
+            resultat = ResultatCorrection(ECHEC, f"Erreur inattendue : {erreur}", motif=str(erreur))
+        self.file.put(("correction", identifiant, resultat))
+
     # ---------- FRONTIÈRE : à partir d'ici, thread principal seulement ----------
 
     def _relever_file(self):
-        """Vide la file, met l'écran à jour, puis se reprogramme tant que la recette tourne."""
+        """Vide la file, met l'écran à jour, puis se reprogramme tant qu'un travail tourne."""
         try:
             while True:
-                type_message, valeur, resultat = self.file.get_nowait()
+                type_message, valeur, contenu = self.file.get_nowait()
                 if type_message == "resultat":
-                    self._afficher_resultat(valeur, resultat)
+                    self._afficher_resultat(valeur, contenu)
                 elif type_message == "erreur":
                     messagebox.showerror("Erreur pendant la recette", valeur)
                 elif type_message == "fin":
                     self._terminer_recette()
+                elif type_message == "correction":
+                    self._terminer_correction(valeur, contenu)
         except queue.Empty:
             pass
-        if self.en_cours:
+        if self._occupe():
             self.fenetre.after(INTERVALLE_FILE_MS, self._relever_file)
+        else:
+            self.boucle_active = False
 
     def _afficher_resultat(self, numero, resultat):
         self.resultats[resultat.identifiant] = resultat
@@ -286,9 +350,31 @@ class Application:
         self.en_cours = False
         self.bouton_lancer.config(state="normal")
         self.choix_profil.config(state="readonly")
-        verdict = calculer_verdict(list(self.resultats.values()))
-        motif = f" ({', '.join(verdict.motifs)})" if verdict.motifs else ""
-        self.texte_verdict.config(text=f"Verdict : {verdict.verdict}{motif}")
+        self._maj_verdict()
+
+    def _terminer_correction(self, identifiant, correction):
+        """Intègre le résultat d'une correction : la ligne reflète la relecture du contrôle (RG06, RG07)."""
+        self.corrections_en_cours.discard(identifiant)
+        relu = correction.relecture
+        if relu is not None:
+            if correction.statut == ATTENTE:
+                # RG07 : la valeur est écrite mais pas prise en compte : la ligne reste rouge, avec son motif.
+                self.attentes[identifiant] = correction.motif
+                relu = replace(
+                    relu, etat=ECART,
+                    constate=f"en attente de prise en compte ({correction.motif})",
+                    message=f"En attente de prise en compte : {correction.motif}.")
+            self.resultats[identifiant] = relu
+        self._appliquer_filtre()
+        self._maj_compteurs()
+        self._maj_titres()
+        self._maj_verdict()
+        if identifiant in self.resultats:
+            self._rafraichir_detail(identifiant, correction.message)
+        if correction.statut == ATTENTE:
+            messagebox.showinfo("Correction", correction.message)
+        elif correction.statut == ECHEC:
+            messagebox.showwarning("Correction", correction.message)
 
     # ---------- Affichage ----------
 
@@ -296,18 +382,19 @@ class Application:
         """Le résultat doit-il être affiché avec le filtre du menu Affichage ?"""
         choix = self.filtre.get()
         if choix == "Écarts seulement":
-            return resultat.etat == ECART
+            return resultat.etat == ECART or resultat.identifiant in self.corrections_en_cours
         if choix == "Indéterminés seulement":
             return resultat.etat == INDETERMINE
         return True
 
     def _inserer_ligne(self, resultat):
         infos = CATALOGUE[resultat.identifiant]
+        etat = EN_COURS if resultat.identifiant in self.corrections_en_cours else resultat.etat
         constate = resultat.constate if resultat.etat in (CONFORME, ECART) else resultat.message
         correction = infos["correction"] if resultat.etat in (ECART, INDETERMINE) else ""
-        ligne = (infos["libelle"], resultat.attendu, constate, resultat.etat, correction)
+        ligne = (infos["libelle"], resultat.attendu, constate, etat, correction)
         for tableau in (self.tableaux["Synthèse"], self.tableaux[infos["domaine"]]):
-            tableau.insert("", "end", iid=resultat.identifiant, values=ligne, tags=(resultat.etat,))
+            tableau.insert("", "end", iid=resultat.identifiant, values=ligne, tags=(etat,))
 
     def _appliquer_filtre(self):
         """Reconstruit tous les tableaux à partir des résultats, selon le filtre choisi."""
@@ -319,6 +406,8 @@ class Application:
 
     def _vider_tableaux(self):
         self.resultats = {}
+        self.attentes = {}
+        self.id_selectionne = None
         for tableau in self.tableaux.values():
             tableau.delete(*tableau.get_children())
         self.avancement["value"] = 0
@@ -344,21 +433,30 @@ class Application:
             nombre = sum(1 for r in ecarts if CATALOGUE[r.identifiant]["domaine"] == domaine)
             self.onglets.tab(position, text=f"{domaine} ({nombre})")
 
+    def _maj_verdict(self):
+        verdict = calculer_verdict(list(self.resultats.values()))
+        motif = f" ({', '.join(verdict.motifs)})" if verdict.motifs else ""
+        self.texte_verdict.config(text=f"Verdict : {verdict.verdict}{motif}")
+
     def _selection(self, evenement):
         selection = evenement.widget.selection()
         if not selection:
             return
-        resultat = self.resultats[selection[0]]
-        infos = CATALOGUE[resultat.identifiant]
+        self.id_selectionne = selection[0]
+        self._rafraichir_detail(self.id_selectionne)
+
+    def _rafraichir_detail(self, identifiant, message=None):
+        """Panneau de détail : libellé, message, consigne ou bouton « Corriger » selon la règle de F6."""
+        resultat = self.resultats[identifiant]
+        infos = CATALOGUE[identifiant]
         self.v_libelle.set(infos["libelle"])
-        self.v_message.set(resultat.message)
+        self.v_message.set(message or resultat.message)
         a_faire = infos["correction"] == MANUELLE and resultat.etat in (ECART, INDETERMINE)
         self.v_consigne.set(f"Ce qu'il faut faire : {infos['consigne']}" if a_faire else "")
-        corrigeable = infos["correction"] == AUTO and resultat.etat == ECART
+        corrigeable = (infos["correction"] == AUTO and resultat.etat == ECART
+                       and identifiant in CORRECTIONS and identifiant not in self.attentes
+                       and not self._occupe() and self.journal_ok)
         self.bouton_corriger.config(state="normal" if corrigeable else "disabled")
-
-    def _corriger(self):
-        messagebox.showinfo("Corriger", "Les corrections seront ajoutées en phase 7.")
 
     def lancer(self):
         self.fenetre.mainloop()
