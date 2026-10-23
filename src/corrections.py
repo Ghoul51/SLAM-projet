@@ -13,7 +13,8 @@ import winreg
 from dataclasses import dataclass
 
 from comparaison import CHROME_OUVRIR_LISTE, CONFORME, INDETERMINE, evaluer_controle
-from powershell import ErreurPowerShell  # noqa: F401  (utilisé par les corrections PowerShell à venir)
+from powershell import ErreurPowerShell, executer_powershell
+from sondes import _litteral
 
 SUCCES, ECHEC, ATTENTE = "Succès", "Échec", "En attente de prise en compte"
 SESSION = "nouvelle ouverture de session nécessaire"
@@ -137,11 +138,29 @@ def corriger_chrome(parametres, delai, journal):
                      complement="Relancer Chrome pour qu'il applique la stratégie.")
 
 
+# --- SEC_PROFILS : profils du pare-feu (PowerShell) -------------------------
+
+def decrire_pare_feu(p):
+    return "Les profils du pare-feu Windows suivants seront activés : " + ", ".join(p["profils"]) + ".", ""
+
+
+def corriger_pare_feu(parametres, delai, journal):
+    noms = ",".join(_litteral(nom) for nom in parametres["profils"])   # 'Domain','Private','Public'
+    commande = f"Set-NetFirewallProfile -Profile {noms} -Enabled True"
+
+    def agir():   # exige les droits d'administrateur
+        executer_powershell(commande, delai)
+
+    prevu = "Set-NetFirewallProfile -Enabled True pour les profils : " + ", ".join(parametres["profils"])
+    return _executer("SEC_PROFILS", parametres, delai, journal, prevu, agir)
+
+
 # Table des corrections : identifiant du catalogue -> (description pour la confirmation, correction)
 CORRECTIONS = {
     "ENV_NUM_PAD": (decrire_pave, corriger_pave),
     "ENV_HIDDEN_FILES": (decrire_explorateur, corriger_explorateur),
     "ENV_CHROME_START": (decrire_chrome, corriger_chrome),
+    "SEC_PROFILS": (decrire_pare_feu, corriger_pare_feu),
 }
 
 
