@@ -1,10 +1,12 @@
 """Interface Tkinter (F6, F7, F8). Aucune commande système dans ce fichier (§3.4.1)."""
+import json
 import logging
 import platform
 import queue
 import threading
 import tkinter as tk
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
@@ -15,9 +17,10 @@ from configuration import ErreurConfiguration, charger_configuration
 from corrections import ATTENTE, CORRECTIONS, ECHEC, ResultatCorrection, appliquer, confirmation, saisie_requise
 from journal import creer_journal
 from profil import ErreurProfil, charger_profil, lister_profils
+from sondes import collecter_etat
 from systeme import ouvrir_dossier
 
-VERSION_APPLICATION = "0.8"
+VERSION_APPLICATION = "0.9"
 EN_COURS = "En cours"
 COULEURS = {CONFORME: "#c8f0c8", ECART: "#f5b5b5", INDETERMINE: "#ffd9a0", NON_EVALUE: "#dddddd", EN_COURS: "#cfe3f7"}
 COLONNES = (
@@ -43,6 +46,8 @@ class Application:
         self.corrections_en_cours = set()   # identifiants dont une correction tourne
         self.attentes = {}                  # identifiant -> motif de prise en compte (RG07)
         self.boucle_active = False          # la relève de la file est-elle programmée ?
+        self.collecte_en_cours = False      # une « Collecte seule » tourne
+        self.avancement_avant = 0           # valeur de la barre avant une collecte
         self.id_selectionne = None
         self.tableaux = {}                  # titre d'onglet -> Treeview
 
@@ -88,8 +93,8 @@ class Application:
 
         recette = tk.Menu(barre, tearoff=False)
         recette.add_command(label="Lancer la recette", command=self.lancer_recette)
-        recette.add_command(label="Rejouer les écarts", state="disabled")        # rejeu : phase 8
-        recette.add_command(label="Collecte seule", state="disabled")            # à venir
+        recette.add_command(label="Rejouer les écarts", command=self.rejouer_ecarts)
+        recette.add_command(label="Collecte seule", command=self.collecte_seule)
         recette.add_command(label="Éditer le procès-verbal", state="disabled")   # PV : phase 8
         barre.add_cascade(label="Recette", menu=recette)
 
@@ -177,7 +182,7 @@ class Application:
     # ---------- Actions du menu Fichier ----------
 
     def _occupe(self):
-        return self.en_cours or bool(self.corrections_en_cours)
+        return self.en_cours or bool(self.corrections_en_cours) or self.collecte_en_cours
 
     def _charger_profil_choisi(self):
         """Valide le profil sélectionné (RG05) et vide le tableau."""
@@ -303,6 +308,43 @@ class Application:
         threading.Thread(target=self._travail_correction, args=(identifiant, parametres), daemon=True).start()
         self._demarrer_boucle()
 
+    def rejouer_ecarts(self):
+        """Menu Recette > « Rejouer les écarts » : relit uniquement les lignes en écart ou indéterminées."""
+        if self._occupe() or self.profil is None:
+            return
+        identifiants = [i for i, r in self.resultats.items() if r.etat in (ECART, INDETERMINE)]
+        if not identifiants:
+            messagebox.showinfo("Rejouer les écarts", "Aucun écart ni contrôle indéterminé à relire.")
+            return
+        self.corrections_en_cours.update(identifiants)   # lignes « En cours », interface occupée jusqu'à la dernière relecture
+        self.bouton_corriger.config(state="disabled")
+        self.bouton_relire.config(state="disabled")
+        self._appliquer_filtre()
+        controles = {i: self.profil.controles[i] for i in identifiants}
+        threading.Thread(target=self._travail_rejeu, args=(controles,), daemon=True).start()
+        self._demarrer_boucle()
+
+    def collecte_seule(self):
+        """Menu Recette > « Collecte seule » : état brut du poste, sans comparaison, dans une fenêtre secondaire."""
+        if self._occupe():
+            return
+        nom = self.choix_profil.get()
+        if not nom:
+            messagebox.showerror("Profil", "Aucun profil sélectionné.")
+            return
+        try:
+            profil = charger_profil(self.chemins[nom])   # le profil dit quels contrôles sont actifs et leurs paramètres
+        except ErreurProfil as erreur:
+            messagebox.showerror("Profil invalide", str(erreur))
+            return
+        self.collecte_en_cours = True
+        self.avancement_avant = self.avancement["value"]   # la barre sert à la collecte, on la rétablira ensuite
+        self.avancement["value"] = 0
+        self.bouton_corriger.config(state="disabled")
+        self.bouton_relire.config(state="disabled")
+        threading.Thread(target=self._travail_collecte, args=(profil,), daemon=True).start()
+        self._demarrer_boucle()
+
     def _relire(self):
         """« Relire ce contrôle » : relance la sonde d'une seule ligne, sans rien modifier sur le poste."""
         identifiant = self.id_selectionne
@@ -347,6 +389,33 @@ class Application:
             resultat = Resultat(identifiant, "", "", INDETERMINE, f"Erreur inattendue : {erreur}")
         self.file.put(("relecture", identifiant, resultat))
 
+    def _travail_rejeu(self, controles):
+        self.journal.info("rejeu des écarts : %d contrôle(s)", len(controles))
+        for identifiant, parametres in controles.items():
+            self._travail_relecture(identifiant, parametres)   # dépose un message « relecture » par ligne
+
+    def _travail_collecte(self, profil):
+        try:
+            self.journal.info("collecte seule demandée par l'opérateur")
+            def rappel(numero, total):
+                self.file.put(("avancement", numero, None))   # la barre est mise à jour par le thread principal
+
+            etat = collecter_etat(profil, self.config.delai_max_secondes, self.journal, rappel)
+            lignes = [f"Collecte seule - poste {platform.node()} - profil {profil.nom} (version {profil.version})",
+                      f"{datetime.now():%d/%m/%Y %H:%M:%S}", ""]
+            for identifiant, (reussi, valeur) in etat.items():
+                lignes.append(f"[{identifiant}] {CATALOGUE[identifiant]['libelle']}")
+                if reussi:
+                    lignes.append(json.dumps(valeur, ensure_ascii=False, indent=2, default=str))
+                else:
+                    lignes.append(f"ILLISIBLE : {valeur}")
+                lignes.append("")
+            texte = "\n".join(lignes)
+        except Exception as erreur:
+            self.journal.exception("erreur inattendue pendant la collecte seule")
+            texte = f"Erreur inattendue pendant la collecte : {erreur}"
+        self.file.put(("collecte", texte, None))
+
     # ---------- FRONTIÈRE : à partir d'ici, thread principal seulement ----------
 
     def _relever_file(self):
@@ -364,6 +433,10 @@ class Application:
                     self._terminer_correction(valeur, contenu)
                 elif type_message == "relecture":
                     self._terminer_relecture(valeur, contenu)
+                elif type_message == "avancement":
+                    self.avancement["value"] = valeur
+                elif type_message == "collecte":
+                    self._terminer_collecte(valeur)
         except queue.Empty:
             pass
         if self._occupe():
@@ -402,7 +475,35 @@ class Application:
         self._maj_compteurs()
         self._maj_titres()
         self._maj_verdict()
-        self._rafraichir_detail(identifiant)
+        if self.id_selectionne in self.resultats:   # lors d'un rejeu, on ne change pas la ligne affichée
+            self._rafraichir_detail(self.id_selectionne)
+
+    def _terminer_collecte(self, texte):
+        """Affiche l'état brut dans une fenêtre secondaire : texte sélectionnable, bouton « Copier »."""
+        self.collecte_en_cours = False
+        self.avancement["value"] = self.avancement_avant   # état de la barre avant la collecte
+        if self.id_selectionne in self.resultats:
+            self._rafraichir_detail(self.id_selectionne)
+        fenetre = tk.Toplevel(self.fenetre)
+        fenetre.title("Collecte seule - état brut du poste")
+        fenetre.geometry("820x600")
+        boutons = ttk.Frame(fenetre, padding=6)
+        boutons.pack(side="bottom", fill="x")
+
+        def copier():
+            # Même chemin que Ctrl+C (qui fonctionne) : on sélectionne tout le texte puis on déclenche « Copier ».
+            zone.tag_add("sel", "1.0", "end-1c")
+            zone.event_generate("<<Copy>>")
+
+        ttk.Button(boutons, text="Copier tout", command=copier).pack(side="left")
+        ttk.Button(boutons, text="Fermer", command=fenetre.destroy).pack(side="right")
+        defilement = ttk.Scrollbar(fenetre, orient="vertical")
+        defilement.pack(side="right", fill="y")
+        zone = tk.Text(fenetre, wrap="none", font=("Consolas", 10), yscrollcommand=defilement.set)
+        defilement.config(command=zone.yview)
+        zone.pack(side="left", fill="both", expand=True)
+        zone.insert("1.0", texte)
+        zone.config(state="disabled")   # lecture seule : la sélection et Ctrl+C restent possibles
 
     def _terminer_correction(self, identifiant, correction):
         """Intègre le résultat d'une correction : la ligne reflète la relecture du contrôle (RG06, RG07)."""

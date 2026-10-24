@@ -322,6 +322,30 @@ def sonde_evenements_critiques(parametres, delai):
     return nombre
 
 
+def collecter_etat(profil, delai, journal=None, rappel=None):
+    """Collecte seule (F7) : valeur brute de chaque sonde des contrôles actifs, sans aucune comparaison.
+
+    `rappel(numero, total)` sert à suivre l'avancement, comme pour la recette (appelé aussi pour les contrôles sautés).
+    Renvoie {identifiant: (lecture réussie ?, valeur lue ou raison de l'échec)}."""
+    etat = {}
+    for numero, (identifiant, sonde) in enumerate(SONDES.items(), start=1):
+        parametres = profil.controles[identifiant]
+        if not parametres["actif"]:
+            if rappel:
+                rappel(numero, len(SONDES))
+            continue
+        try:
+            etat[identifiant] = (True, sonde(parametres, delai))
+        except (ErreurSonde, KeyError, TypeError, ValueError) as erreur:
+            raison = str(erreur).splitlines()[0] if str(erreur) else "lecture impossible"
+            if journal:
+                journal.warning("%s : sonde en erreur : %s", identifiant, raison)
+            etat[identifiant] = (False, raison)
+        if rappel:
+            rappel(numero, len(SONDES))
+    return etat
+
+
 # Table des sondes : identifiant du catalogue -> fonction
 SONDES = {
     "IDENT_MACHINE": sonde_nom_machine,
