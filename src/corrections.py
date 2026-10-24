@@ -155,12 +155,32 @@ def corriger_pare_feu(parametres, delai, journal):
     return _executer("SEC_PROFILS", parametres, delai, journal, prevu, agir)
 
 
+# --- SEC_MAJ_WINDOWS : service de mise à jour de Windows (PowerShell, RG09) ---
+
+def decrire_maj_windows(p):
+    return (f"Le service Windows Update ({p['service']}) sera réactivé : son type de démarrage "
+            f"repassera en « Manuel », réglage normal de Windows. Les mises à jour ne sont jamais "
+            f"désactivées par cette application."), ""
+
+
+def corriger_maj_windows(parametres, delai, journal):
+    service = _litteral(parametres["service"])
+    commande = f"Set-Service -Name {service} -StartupType Manual -ErrorAction Stop"
+
+    def agir():   # exige les droits d'administrateur
+        executer_powershell(commande, delai)
+
+    prevu = f"Set-Service {parametres['service']} -StartupType Manual (réactivation, jamais l'inverse : RG09)"
+    return _executer("SEC_MAJ_WINDOWS", parametres, delai, journal, prevu, agir)
+
+
 # Table des corrections : identifiant du catalogue -> (description pour la confirmation, correction)
 CORRECTIONS = {
     "ENV_NUM_PAD": (decrire_pave, corriger_pave),
     "ENV_HIDDEN_FILES": (decrire_explorateur, corriger_explorateur),
     "ENV_CHROME_START": (decrire_chrome, corriger_chrome),
     "SEC_PROFILS": (decrire_pare_feu, corriger_pare_feu),
+    "SEC_MAJ_WINDOWS": (decrire_maj_windows, corriger_maj_windows),
 }
 
 
