@@ -17,10 +17,11 @@ from configuration import ErreurConfiguration, charger_configuration
 from corrections import ATTENTE, CORRECTIONS, ECHEC, ResultatCorrection, appliquer, confirmation, saisie_requise
 from journal import creer_journal
 from profil import ErreurProfil, charger_profil, lister_profils
+from session import ErreurSession, Session
 from sondes import collecter_etat
 from systeme import ouvrir_dossier
 
-VERSION_APPLICATION = "0.9"
+VERSION_APPLICATION = "0.11"
 EN_COURS = "En cours"
 COULEURS = {CONFORME: "#c8f0c8", ECART: "#f5b5b5", INDETERMINE: "#ffd9a0", NON_EVALUE: "#dddddd", EN_COURS: "#cfe3f7"}
 COLONNES = (
@@ -50,6 +51,7 @@ class Application:
         self.avancement_avant = 0           # valeur de la barre avant une collecte
         self.id_selectionne = None
         self.tableaux = {}                  # titre d'onglet -> Treeview
+        self.session = Session()            # passe initiale + corrections appliquées (F11)
 
         self.fenetre = tk.Tk()
         self.fenetre.title("Recette des postes - EXPERTY")
@@ -194,6 +196,64 @@ class Application:
             self.profil = None
             messagebox.showerror("Profil invalide", str(erreur))
         self._vider_tableaux()
+        self._nouvelle_session()
+
+    def _nouvelle_session(self):
+        """Changer de profil ou de configuration repart de zéro : la passe initiale d'un autre profil n'a aucun sens."""
+        self.session = Session()
+        try:
+            Session.supprimer(self.config.dossier_journal)   # l'ancien fichier de reprise ne correspond plus
+        except OSError as erreur:
+            self.journal.warning("fichier de reprise non supprimé : %s", erreur)
+        self.journal.info("nouvelle session de recette")
+
+    def _sauvegarder_session(self):
+        """Écrit la session sur le disque pour survivre à un redémarrage (RG07, F11)."""
+        if not self.session.a_passe_initiale():
+            return
+        try:
+            self.session.sauvegarder(self.config.dossier_journal)
+        except OSError as erreur:
+            self.journal.warning("session non sauvegardée : %s", erreur)
+            messagebox.showwarning("Reprise de session",
+                                   f"La session n'a pas pu être enregistrée : {erreur}\n\n"
+                                   "Après un redémarrage, la passe initiale serait perdue.")
+
+    def _proposer_reprise(self):
+        """Au lancement : si une session a été interrompue (redémarrage), propose de la reprendre."""
+        try:
+            reprise = Session.charger(self.config.dossier_journal)
+        except ErreurSession as erreur:
+            messagebox.showwarning("Reprise de session", f"{erreur}\n\nLa session précédente est ignorée.")
+            return
+        if reprise is None:
+            return
+        question = (f"Une session de recette est en cours depuis le {reprise.debut.replace('T', ' à ')}.\n"
+                    f"Profil : {reprise.profil_nom} (version {reprise.profil_version})\n"
+                    f"Corrections appliquées : {len(reprise.corrections)}\n\n"
+                    "Reprendre cette session ? Relancez ensuite la recette pour obtenir la passe finale.\n"
+                    "Si vous répondez Non, la session sera abandonnée.")
+        if reprise.profil_fichier not in self.chemins or not messagebox.askyesno("Reprise de session", question):
+            self._abandonner_reprise()
+            return
+        self.choix_profil.set(reprise.profil_fichier)
+        self._charger_profil_choisi()   # charge le profil et crée une session vide (supprime l'ancien fichier)
+        if self.profil is None:
+            return
+        if self.profil.empreinte != reprise.profil_empreinte:
+            messagebox.showwarning("Reprise de session",
+                                   "Le profil a été modifié depuis la passe initiale : les 2 passes ne seraient pas "
+                                   "comparables. La session précédente est abandonnée.")
+            return
+        self.session = reprise
+        self._sauvegarder_session()   # le fichier supprimé par _nouvelle_session est réécrit
+        self.journal.info("session reprise : %d correction(s), profil %s", len(reprise.corrections), reprise.profil_nom)
+
+    def _abandonner_reprise(self):
+        try:
+            Session.supprimer(self.config.dossier_journal)
+        except OSError as erreur:
+            self.journal.warning("fichier de reprise non supprimé : %s", erreur)
 
     def choisir_profil(self):
         if self._occupe():
@@ -226,6 +286,7 @@ class Application:
         self.operateur.set(self.config.operateur_defaut)
         self.profil = None
         self._vider_tableaux()
+        self._nouvelle_session()
 
     def ouvrir_dossier_pv(self):
         try:
@@ -457,6 +518,11 @@ class Application:
         self.bouton_lancer.config(state="normal")
         self.choix_profil.config(state="readonly")
         self._maj_verdict()
+        # F11 : la 1re recette COMPLÈTE de la session devient la passe initiale (25 résultats, aucune erreur en route).
+        if not self.session.a_passe_initiale() and len(self.resultats) == len(CATALOGUE):
+            self.session.enregistrer_initiale(self.resultats, self.profil)
+            self.journal.info("passe initiale conservée : %d contrôle(s)", len(self.resultats))
+            self._sauvegarder_session()
         if self.id_selectionne in self.resultats:   # les boutons du panneau de détail étaient bloqués pendant la recette
             self._rafraichir_detail(self.id_selectionne)
 
@@ -508,6 +574,8 @@ class Application:
     def _terminer_correction(self, identifiant, correction):
         """Intègre le résultat d'une correction : la ligne reflète la relecture du contrôle (RG06, RG07)."""
         self.corrections_en_cours.discard(identifiant)
+        self.session.enregistrer_correction(identifiant, correction.statut, correction.message, correction.motif or "")
+        self._sauvegarder_session()   # RG07 : si la correction exige un redémarrage, la session est déjà sur le disque
         relu = correction.relecture
         if relu is not None:
             if correction.statut == ATTENTE:
@@ -615,4 +683,5 @@ class Application:
         self.bouton_relire.config(state="normal" if relisible else "disabled")
 
     def lancer(self):
+        self.fenetre.after(300, self._proposer_reprise)   # une fois la fenêtre affichée
         self.fenetre.mainloop()
