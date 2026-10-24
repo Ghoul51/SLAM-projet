@@ -9,14 +9,15 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from catalogue import AUTO, CATALOGUE, DOMAINES, MANUELLE
-from comparaison import CONFORME, ECART, INDETERMINE, NON_EVALUE, calculer_verdict, evaluer_profil
+from comparaison import (CONFORME, ECART, INDETERMINE, NON_EVALUE, Resultat, calculer_verdict,
+                         evaluer_controle, evaluer_profil)
 from configuration import ErreurConfiguration, charger_configuration
 from corrections import ATTENTE, CORRECTIONS, ECHEC, ResultatCorrection, appliquer, confirmation, saisie_requise
 from journal import creer_journal
 from profil import ErreurProfil, charger_profil, lister_profils
 from systeme import ouvrir_dossier
 
-VERSION_APPLICATION = "0.7"
+VERSION_APPLICATION = "0.8"
 EN_COURS = "En cours"
 COULEURS = {CONFORME: "#c8f0c8", ECART: "#f5b5b5", INDETERMINE: "#ffd9a0", NON_EVALUE: "#dddddd", EN_COURS: "#cfe3f7"}
 COLONNES = (
@@ -160,7 +161,7 @@ class Application:
         ttk.Label(detail, textvariable=self.v_consigne, wraplength=1050).pack(anchor="w")
         self.bouton_corriger = ttk.Button(detail, text="Corriger", state="disabled", command=self._corriger)
         self.bouton_corriger.pack(side="left", pady=4)
-        self.bouton_relire = ttk.Button(detail, text="Relire ce contrôle", state="disabled")
+        self.bouton_relire = ttk.Button(detail, text="Relire ce contrôle", state="disabled", command=self._relire)
         self.bouton_relire.pack(side="left", padx=8, pady=4)
 
     def _creer_barre_etat(self):
@@ -302,6 +303,20 @@ class Application:
         threading.Thread(target=self._travail_correction, args=(identifiant, parametres), daemon=True).start()
         self._demarrer_boucle()
 
+    def _relire(self):
+        """« Relire ce contrôle » : relance la sonde d'une seule ligne, sans rien modifier sur le poste."""
+        identifiant = self.id_selectionne
+        if (identifiant is None or identifiant not in self.resultats or self.profil is None
+                or self._occupe() or self.resultats[identifiant].etat == NON_EVALUE):
+            return
+        self.corrections_en_cours.add(identifiant)   # même mécanisme que pour une correction : ligne « En cours », interface occupée
+        self.bouton_corriger.config(state="disabled")
+        self.bouton_relire.config(state="disabled")
+        self._appliquer_filtre()
+        threading.Thread(target=self._travail_relecture,
+                         args=(identifiant, self.profil.controles[identifiant]), daemon=True).start()
+        self._demarrer_boucle()
+
     # ---------- Threads de travail : NE TOUCHENT JAMAIS AUX COMPOSANTS GRAPHIQUES ----------
 
     def _travail(self, profil):
@@ -309,7 +324,7 @@ class Application:
             self.file.put(("resultat", numero, resultat))
 
         try:
-            evaluer_profil(profil, self.config.delai_max_secondes, rappel)
+            evaluer_profil(profil, self.config.delai_max_secondes, rappel, self.journal)
         except Exception as erreur:   # le thread ne doit jamais mourir en silence
             self.file.put(("erreur", str(erreur), None))
         self.file.put(("fin", None, None))
@@ -321,6 +336,16 @@ class Application:
             self.journal.exception("%s : erreur inattendue pendant la correction", identifiant)
             resultat = ResultatCorrection(ECHEC, f"Erreur inattendue : {erreur}", motif=str(erreur))
         self.file.put(("correction", identifiant, resultat))
+
+    def _travail_relecture(self, identifiant, parametres):
+        try:
+            self.journal.info("%s : relecture demandée par l'opérateur", identifiant)
+            resultat = evaluer_controle(identifiant, parametres, self.config.delai_max_secondes, self.journal)
+            self.journal.info("%s : relecture : %s", identifiant, resultat.etat)
+        except Exception as erreur:
+            self.journal.exception("%s : erreur inattendue pendant la relecture", identifiant)
+            resultat = Resultat(identifiant, "", "", INDETERMINE, f"Erreur inattendue : {erreur}")
+        self.file.put(("relecture", identifiant, resultat))
 
     # ---------- FRONTIÈRE : à partir d'ici, thread principal seulement ----------
 
@@ -337,6 +362,8 @@ class Application:
                     self._terminer_recette()
                 elif type_message == "correction":
                     self._terminer_correction(valeur, contenu)
+                elif type_message == "relecture":
+                    self._terminer_relecture(valeur, contenu)
         except queue.Empty:
             pass
         if self._occupe():
@@ -357,6 +384,25 @@ class Application:
         self.bouton_lancer.config(state="normal")
         self.choix_profil.config(state="readonly")
         self._maj_verdict()
+        if self.id_selectionne in self.resultats:   # les boutons du panneau de détail étaient bloqués pendant la recette
+            self._rafraichir_detail(self.id_selectionne)
+
+    def _terminer_relecture(self, identifiant, resultat):
+        """Intègre une relecture : la ligne reflète l'état réel du poste. Une mention RG07 reste tant que l'écart persiste."""
+        self.corrections_en_cours.discard(identifiant)
+        if identifiant in self.attentes:
+            if resultat.etat == ECART:
+                resultat = replace(
+                    resultat, constate=f"en attente de prise en compte ({self.attentes[identifiant]})",
+                    message=f"En attente de prise en compte : {self.attentes[identifiant]}.")
+            else:
+                del self.attentes[identifiant]
+        self.resultats[identifiant] = resultat
+        self._appliquer_filtre()
+        self._maj_compteurs()
+        self._maj_titres()
+        self._maj_verdict()
+        self._rafraichir_detail(identifiant)
 
     def _terminer_correction(self, identifiant, correction):
         """Intègre le résultat d'une correction : la ligne reflète la relecture du contrôle (RG06, RG07)."""
@@ -422,6 +468,7 @@ class Application:
         self.v_message.set("")
         self.v_consigne.set("")
         self.bouton_corriger.config(state="disabled")
+        self.bouton_relire.config(state="disabled")
         self._maj_compteurs()
         self._maj_titres()
 
@@ -463,6 +510,8 @@ class Application:
                        and identifiant in CORRECTIONS and identifiant not in self.attentes
                        and not self._occupe() and self.journal_ok)
         self.bouton_corriger.config(state="normal" if corrigeable else "disabled")
+        relisible = (resultat.etat != NON_EVALUE and not self._occupe() and self.profil is not None)
+        self.bouton_relire.config(state="normal" if relisible else "disabled")
 
     def lancer(self):
         self.fenetre.mainloop()

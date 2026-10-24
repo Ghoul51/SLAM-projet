@@ -188,30 +188,34 @@ COMPARATEURS = {
 }
 
 
-def evaluer_controle(identifiant, parametres, delai):
-    """Un contrôle : non évalué, indéterminé, conforme ou écart (RG02)."""
+def evaluer_controle(identifiant, parametres, delai, journal=None):
+    """Un contrôle : non évalué, indéterminé, conforme ou écart (RG02). `journal` reçoit chaque sonde en erreur (§3.2)."""
     if not parametres["actif"]:
         return Resultat(identifiant, "", "", NON_EVALUE, "Contrôle désactivé dans le profil.")
     try:
         valeur = SONDES[identifiant](parametres, delai)
     except ErreurSonde as erreur:
         raison = str(erreur).splitlines()[0] if str(erreur) else "lecture impossible"
+        if journal:
+            journal.warning("%s : sonde en erreur : %s", identifiant, raison)
         return Resultat(identifiant, "", "", INDETERMINE, raison)
     try:
         conforme, attendu, constate = COMPARATEURS[identifiant](parametres, valeur)
     except (KeyError, TypeError, ValueError) as erreur:
+        if journal:
+            journal.warning("%s : valeur lue inattendue : %r", identifiant, erreur)
         return Resultat(identifiant, "", "", INDETERMINE, f"Valeur lue inattendue : {erreur!r}")
     if conforme:
         return Resultat(identifiant, attendu, constate, CONFORME, "Conforme.")
     return Resultat(identifiant, attendu, constate, ECART, f"Attendu : {attendu} ; constaté : {constate}.")
 
 
-def evaluer_profil(profil, delai, rappel=None):
+def evaluer_profil(profil, delai, rappel=None, journal=None):
     """Passe complète : un résultat par contrôle du catalogue. `rappel` sert à suivre l'avancement."""
     resultats = []
     identifiants = list(CATALOGUE)
     for numero, identifiant in enumerate(identifiants, start=1):
-        resultat = evaluer_controle(identifiant, profil.controles[identifiant], delai)
+        resultat = evaluer_controle(identifiant, profil.controles[identifiant], delai, journal)
         resultats.append(resultat)
         if rappel:
             rappel(numero, len(identifiants), resultat)
