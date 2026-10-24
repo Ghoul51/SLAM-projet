@@ -6,12 +6,12 @@ import threading
 import tkinter as tk
 from dataclasses import replace
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from catalogue import AUTO, CATALOGUE, DOMAINES, MANUELLE
 from comparaison import CONFORME, ECART, INDETERMINE, NON_EVALUE, calculer_verdict, evaluer_profil
 from configuration import ErreurConfiguration, charger_configuration
-from corrections import ATTENTE, CORRECTIONS, ECHEC, ResultatCorrection, appliquer, confirmation
+from corrections import ATTENTE, CORRECTIONS, ECHEC, ResultatCorrection, appliquer, confirmation, saisie_requise
 from journal import creer_journal
 from profil import ErreurProfil, charger_profil, lister_profils
 from systeme import ouvrir_dossier
@@ -285,6 +285,12 @@ class Application:
             messagebox.showerror("Correction", "Le journal de session n'est pas disponible : correction refusée.")
             return
         parametres = self.profil.controles[identifiant]
+        question = saisie_requise(identifiant)   # None : aucune saisie ; sinon le texte à demander (IDENT_MACHINE)
+        if question is not None:
+            saisie = simpledialog.askstring("Saisie requise", question, parent=self.fenetre)
+            if saisie is None:   # « Annuler » ou croix : rien n'est lancé
+                return
+            parametres = dict(parametres, numero=saisie.strip())   # copie : le profil chargé n'est pas modifié
         texte = confirmation(identifiant, parametres)
         # RG01 : sans ce clic de confirmation, rien n'est modifié sur le poste.
         if not messagebox.askyesno("Confirmer la correction", f"{texte}\n\nVoulez-vous continuer ?"):
