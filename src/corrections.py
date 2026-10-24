@@ -174,6 +174,66 @@ def corriger_maj_windows(parametres, delai, journal):
     return _executer("SEC_MAJ_WINDOWS", parametres, delai, journal, prevu, agir)
 
 
+# --- LOG_START : services requis démarrés, en démarrage automatique (PowerShell) ---
+
+def decrire_services(p):
+    lignes = []
+    for service in p["services"]:
+        ligne = f"{service['nom']} (démarrage {service['demarrage']}"
+        ligne += ", puis démarré)" if service["etat"] == "Running" else ")"
+        lignes.append(ligne)
+    return "Les services requis seront réglés d'après le profil : " + ", ".join(lignes) + ".", ""
+
+
+def corriger_services(parametres, delai, journal):
+    gestes = []
+    for service in parametres["services"]:
+        nom = _litteral(service["nom"])
+        # D'abord le type de démarrage : un service désactivé ne peut pas être démarré.
+        gestes.append(f"Set-Service -Name {nom} -StartupType {_litteral(service['demarrage'])} -ErrorAction Stop")
+        if service["etat"] == "Running":   # on démarre, on n'arrête jamais un service
+            gestes.append(f"Start-Service -Name {nom} -ErrorAction Stop")
+    commande = "; ".join(gestes)
+
+    def agir():   # exige les droits d'administrateur
+        executer_powershell(commande, delai)
+
+    prevu = "services du profil : " + ", ".join(f"{s['nom']} -> {s['demarrage']}/{s['etat']}" for s in parametres["services"])
+    return _executer("LOG_START", parametres, delai, journal, prevu, agir)
+
+
+# --- SYS_IP : retour au DHCP pour l'adresse et les DNS (PowerShell) ---
+
+def decrire_ip(p):
+    return ("Les interfaces réseau connectées qui ont une adresse IP fixe repasseront en DHCP : l'adresse fixe, "
+            "la passerelle fixe et les serveurs DNS fixes seront retirés. La connexion réseau peut être "
+            "interrompue quelques secondes."), ""
+
+
+def corriger_ip(parametres, delai, journal):
+    # Mêmes interfaces que la sonde, mais seulement celles dont le DHCP est désactivé.
+    commande = (
+        "Get-NetIPInterface -AddressFamily IPv4 | "
+        "Where-Object { $_.ConnectionState -eq 'Connected' -and $_.InterfaceAlias -notlike 'Loopback*' "
+        "-and $_.Dhcp -eq 'Disabled' } | "
+        "ForEach-Object { "
+        "$n = $_.InterfaceIndex; "
+        "Set-NetIPInterface -InterfaceIndex $n -Dhcp Enabled -ErrorAction Stop; "
+        "Get-NetRoute -InterfaceIndex $n -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | "
+        "Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue; "
+        "Get-NetIPAddress -InterfaceIndex $n -AddressFamily IPv4 -ErrorAction SilentlyContinue | "
+        "Where-Object { $_.PrefixOrigin -eq 'Manual' } | "
+        "Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue; "
+        "Set-DnsClientServerAddress -InterfaceIndex $n -ResetServerAddresses -ErrorAction Stop }"
+    )
+
+    def agir():   # exige les droits d'administrateur
+        executer_powershell(commande, delai)
+
+    prevu = "Set-NetIPInterface -Dhcp Enabled, retrait de l'adresse et de la passerelle fixes, DNS remis en automatique"
+    return _executer("SYS_IP", parametres, delai, journal, prevu, agir)
+
+
 # Table des corrections : identifiant du catalogue -> (description pour la confirmation, correction)
 CORRECTIONS = {
     "ENV_NUM_PAD": (decrire_pave, corriger_pave),
@@ -181,6 +241,8 @@ CORRECTIONS = {
     "ENV_CHROME_START": (decrire_chrome, corriger_chrome),
     "SEC_PROFILS": (decrire_pare_feu, corriger_pare_feu),
     "SEC_MAJ_WINDOWS": (decrire_maj_windows, corriger_maj_windows),
+    "LOG_START": (decrire_services, corriger_services),
+    "SYS_IP": (decrire_ip, corriger_ip),
 }
 
 
