@@ -184,3 +184,6 @@ python-portable/
 python-tk/
 pv/
 journal/
+build/
+dist/
+livraison/
