@@ -17,11 +17,13 @@ from configuration import ErreurConfiguration, charger_configuration
 from corrections import ATTENTE, CORRECTIONS, ECHEC, ResultatCorrection, appliquer, confirmation, saisie_requise
 from journal import creer_journal
 from profil import ErreurProfil, charger_profil, lister_profils
+from pv import ContextePV, generer_pv
 from session import ErreurSession, Session
 from sondes import collecter_etat
-from systeme import ouvrir_dossier
+from systeme import lire_identite_poste, ouvrir_dossier, ouvrir_fichier
 
-VERSION_APPLICATION = "0.11"
+VERSION_APPLICATION = "0.12"
+LIBELLE_PV = "Éditer le procès-verbal"
 EN_COURS = "En cours"
 COULEURS = {CONFORME: "#c8f0c8", ECART: "#f5b5b5", INDETERMINE: "#ffd9a0", NON_EVALUE: "#dddddd", EN_COURS: "#cfe3f7"}
 COLONNES = (
@@ -48,6 +50,7 @@ class Application:
         self.attentes = {}                  # identifiant -> motif de prise en compte (RG07)
         self.boucle_active = False          # la relève de la file est-elle programmée ?
         self.collecte_en_cours = False      # une « Collecte seule » tourne
+        self.pv_en_cours = False            # un procès-verbal est en cours d'édition
         self.avancement_avant = 0           # valeur de la barre avant une collecte
         self.id_selectionne = None
         self.tableaux = {}                  # titre d'onglet -> Treeview
@@ -97,7 +100,8 @@ class Application:
         recette.add_command(label="Lancer la recette", command=self.lancer_recette)
         recette.add_command(label="Rejouer les écarts", command=self.rejouer_ecarts)
         recette.add_command(label="Collecte seule", command=self.collecte_seule)
-        recette.add_command(label="Éditer le procès-verbal", state="disabled")   # PV : phase 8
+        recette.add_command(label=LIBELLE_PV, command=self.editer_pv, state="disabled")   # actif après une recette complète
+        self.menu_recette = recette
         barre.add_cascade(label="Recette", menu=recette)
 
         affichage = tk.Menu(barre, tearoff=False)
@@ -184,7 +188,7 @@ class Application:
     # ---------- Actions du menu Fichier ----------
 
     def _occupe(self):
-        return self.en_cours or bool(self.corrections_en_cours) or self.collecte_en_cours
+        return self.en_cours or bool(self.corrections_en_cours) or self.collecte_en_cours or self.pv_en_cours
 
     def _charger_profil_choisi(self):
         """Valide le profil sélectionné (RG05) et vide le tableau."""
@@ -201,6 +205,7 @@ class Application:
     def _nouvelle_session(self):
         """Changer de profil ou de configuration repart de zéro : la passe initiale d'un autre profil n'a aucun sens."""
         self.session = Session()
+        self._maj_menu_pv()
         try:
             Session.supprimer(self.config.dossier_journal)   # l'ancien fichier de reprise ne correspond plus
         except OSError as erreur:
@@ -225,6 +230,7 @@ class Application:
             reprise = Session.charger(self.config.dossier_journal)
         except ErreurSession as erreur:
             messagebox.showwarning("Reprise de session", f"{erreur}\n\nLa session précédente est ignorée.")
+            self._abandonner_reprise()   # sinon le même avertissement reviendrait à chaque lancement
             return
         if reprise is None:
             return
@@ -248,6 +254,33 @@ class Application:
         self.session = reprise
         self._sauvegarder_session()   # le fichier supprimé par _nouvelle_session est réécrit
         self.journal.info("session reprise : %d correction(s), profil %s", len(reprise.corrections), reprise.profil_nom)
+
+    def _maj_menu_pv(self):
+        """« Éditer le procès-verbal » : actif quand une passe initiale existe, que la passe finale est complète et que rien ne tourne."""
+        pret = (self.session.a_passe_initiale() and len(self.resultats) == len(CATALOGUE) and not self._occupe())
+        self.menu_recette.entryconfig(LIBELLE_PV, state="normal" if pret else "disabled")
+
+    def editer_pv(self):
+        """Menu Recette > « Éditer le procès-verbal » (F11) : copie les données ici, le travail se fait dans un thread."""
+        if self._occupe() or self.profil is None or not self.session.a_passe_initiale() \
+                or len(self.resultats) != len(CATALOGUE):
+            return
+        if self.profil.empreinte != self.session.profil_empreinte:
+            messagebox.showwarning(
+                "Procès-verbal",
+                "Le profil a été modifié depuis la passe initiale : les 2 passes ne sont pas comparables.\n\n"
+                "Rechargez le profil (Fichier > Choisir le profil…) pour repartir d'une nouvelle session.")
+            return
+        contexte = ContextePV(
+            profil=self.profil, operateur=self.operateur.get().strip() or "non renseigné",
+            version_application=VERSION_APPLICATION, horodatage=datetime.now(), debut_session=self.session.debut,
+            initiale=dict(self.session.initiale), corrections=list(self.session.corrections),
+            finale=dict(self.resultats))   # copies : le thread de travail ne lit jamais l'interface
+        self.pv_en_cours = True
+        self._maj_menu_pv()
+        threading.Thread(target=self._travail_pv, args=(contexte, self.config.dossier_pv,
+                                                         self.config.delai_max_secondes), daemon=True).start()
+        self._demarrer_boucle()
 
     def _abandonner_reprise(self):
         try:
@@ -455,6 +488,16 @@ class Application:
         for identifiant, parametres in controles.items():
             self._travail_relecture(identifiant, parametres)   # dépose un message « relecture » par ligne
 
+    def _travail_pv(self, contexte, dossier_pv, delai):
+        try:
+            poste = lire_identite_poste(delai, self.journal)
+            chemin, verdict = generer_pv(dossier_pv, poste, contexte)
+            self.journal.info("PV édité : %s (verdict : %s)", chemin, verdict.verdict)
+            self.file.put(("pv", (chemin, verdict.verdict), None))
+        except Exception as erreur:
+            self.journal.exception("erreur pendant l'édition du procès-verbal")
+            self.file.put(("pv", None, f"{type(erreur).__name__} : {erreur}"))
+
     def _travail_collecte(self, profil):
         try:
             self.journal.info("collecte seule demandée par l'opérateur")
@@ -498,6 +541,8 @@ class Application:
                     self.avancement["value"] = valeur
                 elif type_message == "collecte":
                     self._terminer_collecte(valeur)
+                elif type_message == "pv":
+                    self._terminer_pv(valeur, contenu)
         except queue.Empty:
             pass
         if self._occupe():
@@ -518,11 +563,13 @@ class Application:
         self.bouton_lancer.config(state="normal")
         self.choix_profil.config(state="readonly")
         self._maj_verdict()
+        self._maj_menu_pv()
         # F11 : la 1re recette COMPLÈTE de la session devient la passe initiale (25 résultats, aucune erreur en route).
         if not self.session.a_passe_initiale() and len(self.resultats) == len(CATALOGUE):
             self.session.enregistrer_initiale(self.resultats, self.profil)
             self.journal.info("passe initiale conservée : %d contrôle(s)", len(self.resultats))
             self._sauvegarder_session()
+            self._maj_menu_pv()   # la passe initiale vient d'être créée
         if self.id_selectionne in self.resultats:   # les boutons du panneau de détail étaient bloqués pendant la recette
             self._rafraichir_detail(self.id_selectionne)
 
@@ -541,12 +588,46 @@ class Application:
         self._maj_compteurs()
         self._maj_titres()
         self._maj_verdict()
+        self._maj_menu_pv()
         if self.id_selectionne in self.resultats:   # lors d'un rejeu, on ne change pas la ligne affichée
             self._rafraichir_detail(self.id_selectionne)
+
+    def _terminer_pv(self, resultat, erreur):
+        """Fenêtre secondaire : chemin du PV produit, bouton « Ouvrir » (F11)."""
+        self.pv_en_cours = False
+        self._maj_menu_pv()
+        if erreur:
+            messagebox.showerror("Procès-verbal", f"Le procès-verbal n'a pas pu être édité.\n\n{erreur}")
+            return
+        chemin, verdict = resultat
+        self._abandonner_reprise()   # la session est close : plus rien à reprendre après un redémarrage
+        fenetre = tk.Toplevel(self.fenetre)
+        fenetre.title("Procès-verbal édité")
+        fenetre.resizable(False, False)
+        cadre = ttk.Frame(fenetre, padding=12)
+        cadre.pack(fill="both", expand=True)
+        ttk.Label(cadre, text=f"Verdict : {verdict}", font=("Segoe UI", 11, "bold")).pack(anchor="w")
+        ttk.Label(cadre, text="Le procès-verbal a été enregistré ici :").pack(anchor="w", pady=(8, 2))
+        saisie = ttk.Entry(cadre, width=90)
+        saisie.insert(0, str(chemin))
+        saisie.config(state="readonly")   # lisible et copiable, non modifiable
+        saisie.pack(fill="x")
+
+        def ouvrir():
+            try:
+                ouvrir_fichier(chemin)
+            except OSError as erreur_ouverture:
+                messagebox.showerror("Procès-verbal", f"Impossible d'ouvrir le fichier : {erreur_ouverture}", parent=fenetre)
+
+        boutons = ttk.Frame(cadre)
+        boutons.pack(anchor="e", pady=(10, 0))
+        ttk.Button(boutons, text="Ouvrir", command=ouvrir).pack(side="left", padx=4)
+        ttk.Button(boutons, text="Fermer", command=fenetre.destroy).pack(side="left")
 
     def _terminer_collecte(self, texte):
         """Affiche l'état brut dans une fenêtre secondaire : texte sélectionnable, bouton « Copier »."""
         self.collecte_en_cours = False
+        self._maj_menu_pv()
         self.avancement["value"] = self.avancement_avant   # état de la barre avant la collecte
         if self.id_selectionne in self.resultats:
             self._rafraichir_detail(self.id_selectionne)
@@ -590,6 +671,7 @@ class Application:
         self._maj_compteurs()
         self._maj_titres()
         self._maj_verdict()
+        self._maj_menu_pv()
         if identifiant in self.resultats:
             self._rafraichir_detail(identifiant, correction.message)
         if correction.statut == ATTENTE:
@@ -640,6 +722,7 @@ class Application:
         self.bouton_relire.config(state="disabled")
         self._maj_compteurs()
         self._maj_titres()
+        self._maj_menu_pv()
 
     def _maj_compteurs(self):
         etats = [r.etat for r in self.resultats.values()]
